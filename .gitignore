@@ -20,5 +20,9 @@ myapi.key
 xv6.out*
 .vagrant/
 submissions/
+<<<<<<< HEAD
 ph
 barrier
+=======
+.vscode/
+>>>>>>> ca31d1f... setup .clang-format and ignore .vscode
