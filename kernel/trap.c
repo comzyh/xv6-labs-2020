@@ -67,9 +67,19 @@ usertrap(void)
     syscall();
   } else if((which_dev = devintr()) != 0){
     // ok
+  } else if(r_scause() == 15) { // page fault on write
+    uint64 access_addr = r_stval();
+    if(access_addr > p->sz) {
+      p->killed = 1;
+    } else if(cow_alloc(p->pagetable, access_addr) == 0) {
+      p->killed = 1;
+    }
   } else {
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
     printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
+    if(r_scause() == 12 || r_scause() == 2) {
+      pteprint(p->pagetable, 1, 0, 0x4000);
+    }
     p->killed = 1;
   }
 

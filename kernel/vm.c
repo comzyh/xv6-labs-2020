@@ -5,6 +5,8 @@
 #include "riscv.h"
 #include "defs.h"
 #include "fs.h"
+#include "spinlock.h"
+#include "proc.h"
 
 /*
  * the kernel's page table.
@@ -335,6 +337,33 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
   return -1;
 }
 
+int
+uvmcopy_on_write(pagetable_t old, pagetable_t new, uint64 sz)
+{
+  pte_t *pte;
+  uint64 pa, i;
+  uint flags;
+
+  for(i = 0; i < sz; i += PGSIZE) {
+    if((pte = walk(old, i, 0)) == 0)
+      panic("uvmcopy: pte should exist");
+    if((*pte & PTE_V) == 0)
+      panic("uvmcopy: page not present");
+    pa = PTE2PA(*pte);
+    flags = PTE_FLAGS(*pte) & ~PTE_W;
+    *pte = PA2PTE(pa) | flags; // make the page read-only
+    if(mappages(new, i, PGSIZE, pa, flags) != 0) {
+      goto err;
+    }
+    kmemref_modify((void *)pa, 1); // increase the reference count
+  }
+  return 0;
+
+err:
+  uvmunmap(new, 0, i / PGSIZE, 1);
+  return -1;
+}
+
 // mark a PTE invalid for user access.
 // used by exec for the user stack guard page.
 void
@@ -358,7 +387,8 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
 
   while(len > 0){
     va0 = PGROUNDDOWN(dstva);
-    pa0 = walkaddr(pagetable, va0);
+    // pa0 = walkaddr(pagetable, va0);
+    pa0 = cow_alloc(pagetable, va0);
     if(pa0 == 0)
       return -1;
     n = PGSIZE - (dstva - va0);
@@ -438,5 +468,83 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
     return 0;
   } else {
     return -1;
+  }
+}
+
+// Handle the COW when store page fault happen
+// if the current reference count == 1, use the page without alloc, and add the
+// PTE_W flage to PTE
+// Return the physical page of this va
+uint64
+cow_alloc(pagetable_t pagetable, uint64 va)
+{
+  if(va >= MAXVA)
+    return 0;
+  uint64 base_addr = PGROUNDDOWN(va);
+  uint64 pa;
+
+  // get the PTE of current va
+  pte_t *pte;
+  if((pte = walk(pagetable, va, 0)) == 0)
+    return 0;
+  if((*pte & PTE_V) == 0)
+    return 0;
+  if((*pte & PTE_U) == 0)
+    return 0;
+  pa = PTE2PA(*pte);
+  if(*pte & PTE_W) {
+    return pa;
+  }
+
+  // decrease the reference of current page
+  int ref = kmemref_modify((void *)pa, -1);
+  if(ref == 0) {   // current process is the only holder
+    *pte |= PTE_W; // add the PTE_W flage back
+    kmemref_modify((void *)pa, 1);
+    return pa;
+  }
+
+  // copy page
+  char *mem = kalloc();
+  if(mem) {
+    memmove(mem, (char *)pa, PGSIZE);
+    *pte &= ~PTE_V; // invalid the current pte, avoid `remap` panic in mappages
+    if(mappages(pagetable,
+                base_addr,
+                PGSIZE,
+                (uint64)mem,
+                PTE_W | PTE_X | PTE_R | PTE_U) != 0) {
+      kfree(mem);
+      return 0;
+    }
+  } else {
+    kmemref_modify((void *)pa, 1);
+
+    return 0;
+  }
+
+  return (uint64)mem; // return the physical address
+}
+
+void
+pteprint(pagetable_t pagetable, int level, uint64 baseaddr, uint64 maxaddr)
+{
+  int shift = PXSHIFT(3 - level);
+  // there are 2^9 = 512 PTEs in a page table.
+  for(int i = 0; i < 512 && baseaddr + ((uint64)i << shift) < maxaddr; i++) {
+    pte_t pte = pagetable[i];
+    if((pte & PTE_V) == 0) // skip invalid pages
+      continue;
+    for(int i = 0; i < level; i++) {
+      printf("..");
+    }
+    printf("%d: pte %p pa %p\n", i, pte, PTE2PA(pte));
+    if((pte & (PTE_R | PTE_W | PTE_X)) == 0) {
+      uint64 child = PTE2PA(pte);
+      pteprint((pagetable_t)child,
+               level + 1,
+               baseaddr + ((uint64)i << shift),
+               maxaddr);
+    }
   }
 }
