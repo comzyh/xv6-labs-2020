@@ -64,3 +64,6 @@ main(int argc, char* argv[])
 // A: all write side of this pipe is closed, include all of its' copy.
 //    no mater before fork(parent) or after fork(child).
 //    which means we must not forget to close the write side of pipe in child
+// learns: 
+// 1. PIPE have direction! you can only write from p[1] and read from p[0]
+// 2. You should close all the copy of one siede of pipe to close that side.
