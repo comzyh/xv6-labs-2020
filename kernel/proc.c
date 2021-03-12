@@ -127,6 +127,9 @@ found:
   p->context.ra = (uint64)forkret;
   p->context.sp = p->kstack + PGSIZE;
 
+  // Set the trace mask to 0
+  p->trace_mask = 0;
+
   return p;
 }
 
@@ -283,6 +286,9 @@ fork(void)
   // Cause fork to return 0 in the child.
   np->trapframe->a0 = 0;
 
+  // Copy the trace mask to the child.
+  np->trace_mask = p->trace_mask;
+
   // increment reference counts on open file descriptors.
   for(i = 0; i < NOFILE; i++)
     if(p->ofile[i])
@@ -294,6 +300,7 @@ fork(void)
   pid = np->pid;
 
   np->state = RUNNABLE;
+
 
   release(&np->lock);
 
