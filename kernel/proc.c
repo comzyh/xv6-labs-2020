@@ -121,6 +121,9 @@ found:
     return 0;
   }
 
+  // An copy of kernel page table
+  p->kernel_pagetable =  pkptinit(p->pagetable);
+
   // Set up new context to start executing at forkret,
   // which returns to user space.
   memset(&p->context, 0, sizeof(p->context));
@@ -139,6 +142,8 @@ freeproc(struct proc *p)
   if(p->trapframe)
     kfree((void*)p->trapframe);
   p->trapframe = 0;
+  if (p->kernel_pagetable)
+    pkptfree(p->kernel_pagetable, p->pagetable);
   if(p->pagetable)
     proc_freepagetable(p->pagetable, p->sz);
   p->pagetable = 0;
@@ -473,7 +478,10 @@ scheduler(void)
         // before jumping back to us.
         p->state = RUNNING;
         c->proc = p;
+        // w_satp(MAKE_SATP(p->kernel_pagetable));
+        // sfence_vma();
         swtch(&c->context, &p->context);
+        kvminithart();
 
         // Process is done running for now.
         // It should have changed its p->state before coming back.

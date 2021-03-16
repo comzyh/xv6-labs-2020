@@ -467,3 +467,19 @@ vmprint(pagetable_t pagetable)
   printf("page table %p\n", pagetable);
   pteprint(pagetable, 1);
 }
+
+// init an kernel pagetable for process
+pagetable_t
+pkptinit(pagetable_t process_pagetable)
+{
+  pagetable_t proc_kernel_pagetable = kalloc();
+  memmove(proc_kernel_pagetable, kernel_pagetable, PGSIZE);
+  return proc_kernel_pagetable;
+}
+
+// free an process kernel pagetable
+void
+pkptfree(pagetable_t proc_kernel_pagetable, pagetable_t process_pagetable)
+{
+  kfree((void *)proc_kernel_pagetable);
+}
