@@ -108,6 +108,7 @@ exec(char *path, char **argv)
       last = s+1;
   safestrcpy(p->name, last, sizeof(p->name));
     
+  pkptsync(p->kernel_pagetable, p->pagetable, p->sz, 0); // release old kpt
   // Commit to the user image.
   oldpagetable = p->pagetable;
   p->pagetable = pagetable;
@@ -115,6 +116,10 @@ exec(char *path, char **argv)
   p->trapframe->epc = elf.entry;  // initial program counter = main
   p->trapframe->sp = sp; // initial stack pointer
   proc_freepagetable(oldpagetable, oldsz);
+
+  // copy userspace to process kernel page table
+  if(pkptsync(p->kernel_pagetable, p->pagetable, 0, sz) < 0)
+    goto bad;
 
   if(p->pid==1) 
     vmprint(p->pagetable);

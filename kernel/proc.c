@@ -122,7 +122,7 @@ found:
   }
 
   // An copy of kernel page table
-  p->kernel_pagetable =  pkptinit(p->pagetable);
+  p->kernel_pagetable =  pkptinit();
 
   // Set up new context to start executing at forkret,
   // which returns to user space.
@@ -142,10 +142,12 @@ freeproc(struct proc *p)
   if(p->trapframe)
     kfree((void*)p->trapframe);
   p->trapframe = 0;
-  if (p->kernel_pagetable)
-    pkptfree(p->kernel_pagetable, p->pagetable);
-  if(p->pagetable)
+  if (p->kernel_pagetable){
+    pkptfree(p->kernel_pagetable);
+  }
+  if(p->pagetable) {
     proc_freepagetable(p->pagetable, p->sz);
+  }
   p->pagetable = 0;
   p->sz = 0;
   p->pid = 0;
@@ -226,6 +228,9 @@ userinit(void)
   uvminit(p->pagetable, initcode, sizeof(initcode));
   p->sz = PGSIZE;
 
+  // copy userspace to process kernel page table
+  pkptsync(p->kernel_pagetable, p->pagetable, 0, p->sz);
+
   // prepare for the very first "return" from kernel to user.
   p->trapframe->epc = 0;      // user program counter
   p->trapframe->sp = PGSIZE;  // user stack pointer
@@ -248,11 +253,19 @@ growproc(int n)
 
   sz = p->sz;
   if(n > 0){
+
     if((sz = uvmalloc(p->pagetable, sz, sz + n)) == 0) {
       return -1;
     }
   } else if(n < 0){
     sz = uvmdealloc(p->pagetable, sz, sz + n);
+
+  }
+  // sync the process kernel pagetable with new size
+  if (pkptsync(p->kernel_pagetable, p->pagetable, p->sz, sz) != 0) {
+    // must be n > 0 failure
+    uvmdealloc(p->pagetable, sz, p->sz);
+    return -1;
   }
   p->sz = sz;
   return 0;
@@ -278,6 +291,15 @@ fork(void)
     release(&np->lock);
     return -1;
   }
+
+  // copy userspace to process kernel page table
+  if (pkptsync(np->kernel_pagetable, np->pagetable, 0, p->sz) != 0) {
+    uvmdealloc(np->pagetable,p->sz,0);
+    freeproc(np);
+    release(&np->lock);
+    return -1;
+  }
+
   np->sz = p->sz;
 
   np->parent = p;
@@ -478,8 +500,8 @@ scheduler(void)
         // before jumping back to us.
         p->state = RUNNING;
         c->proc = p;
-        // w_satp(MAKE_SATP(p->kernel_pagetable));
-        // sfence_vma();
+        w_satp(MAKE_SATP(p->kernel_pagetable));
+        sfence_vma();
         swtch(&c->context, &p->context);
         kvminithart();
 

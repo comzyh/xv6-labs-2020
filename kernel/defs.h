@@ -67,6 +67,8 @@ void            ramdiskrw(struct buf*);
 void*           kalloc(void);
 void            kfree(void *);
 void            kinit(void);
+int             kfreemem(void);
+
 
 // log.c
 void            initlog(int, struct superblock*);
@@ -160,8 +162,9 @@ int             uartgetc(void);
 // vm.c
 void            kvminit(void);
 void            kvminithart(void);
-pagetable_t     pkptinit(pagetable_t);
-void            pkptfree(pagetable_t, pagetable_t);
+pagetable_t     pkptinit();
+void            pkptfree(pagetable_t);
+int             pkptsync(pagetable_t, pagetable_t, int, int);
 uint64          kvmpa(uint64);
 void            kvmmap(uint64, uint64, uint64, int);
 int             mappages(pagetable_t, uint64, uint64, uint64, int);
@@ -181,6 +184,7 @@ int             copyout(pagetable_t, uint64, char *, uint64);
 int             copyin(pagetable_t, char *, uint64, uint64);
 int             copyinstr(pagetable_t, char *, uint64, uint64);
 void            vmprint(pagetable_t);
+void            pteprint(pagetable_t, int, uint64, uint64);
 
 // plic.c
 void            plicinit(void);
@@ -226,3 +230,7 @@ int             sockread(struct sock *, uint64, int);
 int             sockwrite(struct sock *, uint64, int);
 void            sockrecvudp(struct mbuf*, uint32, uint16, uint16);
 #endif
+
+// vmcopyin.c
+int             copyin_new(pagetable_t, char*, uint64, uint64);
+int             copyinstr_new(pagetable_t, char*, uint64, uint64);

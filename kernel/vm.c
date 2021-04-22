@@ -233,6 +233,10 @@ uvmalloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz)
 
   if(newsz < oldsz)
     return oldsz;
+  if(newsz >= PLIC) {
+    printf("too much new sz %d\n", newsz);
+    return 0;
+  }
 
   oldsz = PGROUNDUP(oldsz);
   for(a = oldsz; a < newsz; a += PGSIZE){
@@ -379,23 +383,7 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
 int
 copyin(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len)
 {
-  uint64 n, va0, pa0;
-
-  while(len > 0){
-    va0 = PGROUNDDOWN(srcva);
-    pa0 = walkaddr(pagetable, va0);
-    if(pa0 == 0)
-      return -1;
-    n = PGSIZE - (srcva - va0);
-    if(n > len)
-      n = len;
-    memmove(dst, (void *)(pa0 + (srcva - va0)), n);
-
-    len -= n;
-    dst += n;
-    srcva = va0 + PGSIZE;
-  }
-  return 0;
+  return copyin_new(pagetable, dst, srcva, len);
 }
 
 // Copy a null-terminated string from user to kernel.
@@ -405,48 +393,15 @@ copyin(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len)
 int
 copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
 {
-  uint64 n, va0, pa0;
-  int got_null = 0;
-
-  while(got_null == 0 && max > 0){
-    va0 = PGROUNDDOWN(srcva);
-    pa0 = walkaddr(pagetable, va0);
-    if(pa0 == 0)
-      return -1;
-    n = PGSIZE - (srcva - va0);
-    if(n > max)
-      n = max;
-
-    char *p = (char *) (pa0 + (srcva - va0));
-    while(n > 0){
-      if(*p == '\0'){
-        *dst = '\0';
-        got_null = 1;
-        break;
-      } else {
-        *dst = *p;
-      }
-      --n;
-      --max;
-      p++;
-      dst++;
-    }
-
-    srcva = va0 + PGSIZE;
-  }
-  if(got_null){
-    return 0;
-  } else {
-    return -1;
-  }
+  return copyinstr_new(pagetable, dst, srcva, max);
 }
 
 void
-pteprint(pagetable_t pagetable, int level)
+pteprint(pagetable_t pagetable, int level, uint64 baseaddr, uint64 maxaddr)
 {
-
+  int shift = PXSHIFT(3 - level);
   // there are 2^9 = 512 PTEs in a page table.
-  for(int i = 0; i < 512; i++) {
+  for(int i = 0; i < 512 && baseaddr + ((uint64)i << shift) < maxaddr; i++) {
     pte_t pte = pagetable[i];
     if((pte & PTE_V) == 0) // skip invalid pages
       continue;
@@ -456,7 +411,10 @@ pteprint(pagetable_t pagetable, int level)
     printf("%d: pte %p pa %p\n", i, pte, PTE2PA(pte));
     if((pte & (PTE_R | PTE_W | PTE_X)) == 0) {
       uint64 child = PTE2PA(pte);
-      pteprint((pagetable_t)child, level + 1);
+      pteprint((pagetable_t)child,
+               level + 1,
+               baseaddr + ((uint64)i << shift),
+               maxaddr);
     }
   }
 }
@@ -465,21 +423,140 @@ void
 vmprint(pagetable_t pagetable)
 {
   printf("page table %p\n", pagetable);
-  pteprint(pagetable, 1);
+  pteprint(pagetable, 1, 0, 0x7fffffffffffffffL);
 }
 
 // init an kernel pagetable for process
 pagetable_t
-pkptinit(pagetable_t process_pagetable)
+pkptinit()
 {
   pagetable_t proc_kernel_pagetable = kalloc();
   memmove(proc_kernel_pagetable, kernel_pagetable, PGSIZE);
   return proc_kernel_pagetable;
 }
 
+// free the process kernel page table
+void
+pkptfreewalk(pagetable_t pkpt, pagetable_t kpt)
+{
+  for(int i = 0; i < 512; i++) {
+    pte_t pte = pkpt[i];
+    pte_t kpte = 0;
+    if(kpt) {
+      kpte = kpt[i];
+    }
+    if((pte & PTE_V) && (pte & (PTE_R | PTE_W | PTE_X)) == 0 &&
+       // do not free kernel page table
+       (kpte == 0 || pkpt[i] != kpte)) {
+      pkptfreewalk((pagetable_t)PTE2PA(pkpt[i]), (pagetable_t)PTE2PA(kpte));
+    }
+  }
+  kfree((void *)pkpt);
+}
+
 // free an process kernel pagetable
 void
-pkptfree(pagetable_t proc_kernel_pagetable, pagetable_t process_pagetable)
+pkptfree(pagetable_t proc_kernel_pagetable)
 {
-  kfree((void *)proc_kernel_pagetable);
+  pkptfreewalk(proc_kernel_pagetable, kernel_pagetable);
+}
+
+int
+pkptalloc(pagetable_t pkpt,
+          pagetable_t upt,
+          int shift,
+          uint64 baseaddr,
+          int lsz,
+          int hsz)
+{
+  if(lsz < baseaddr)
+    lsz = baseaddr;
+  for(int i = (lsz - baseaddr) >> shift;
+      baseaddr + ((uint64)i << shift) < hsz && i < 512;
+      i++) {
+    pte_t upte = upt[i];
+    if(shift == PGSHIFT) { // leaf
+      pkpt[i] = upte & ~PTE_U;
+      continue;
+    }
+    if(lsz <= baseaddr + ((uint64)i << shift)) { // alloc
+      pagetable_t pt = kalloc();
+      if(pt == 0) {
+        return -1;
+      }
+      if(pkpt[i] & PTE_V) { // copy page table
+        memmove(pt, (void *)PTE2PA(pkpt[i]), PGSIZE);
+      } else {
+        memset(pt, 0, PGSIZE);
+      }
+      pkpt[i] = PA2PTE(pt) | PTE_V;
+    }
+    if(pkptalloc((pagetable_t)PTE2PA(pkpt[i]),
+                 (pagetable_t)PTE2PA(upte),
+                 shift - 9,
+                 baseaddr + ((uint64)i << shift),
+                 lsz,
+                 hsz) != 0)
+      return -1;
+  }
+  return 0;
+}
+
+void
+pkptdealloc(pagetable_t pkpt,
+            pagetable_t kpt,
+            int shift,
+            uint64 baseaddr,
+            int lsz,
+            int hsz)
+{
+  if(lsz < baseaddr)
+    lsz = baseaddr;
+  for(int i = PGROUNDUP(lsz - baseaddr) >> shift;
+      baseaddr + ((uint64)i << shift) < hsz && i < 512;
+      i++) {
+    if(shift == PGSHIFT) { // leaf
+      pkpt[i] = 0;
+      continue;
+    }
+    pte_t pte = pkpt[i];
+    pte_t kpte = kpt ? kpt[i] : 0;
+
+    // do not free invaid pages or kernel pages
+    if((pte & PTE_V) == 0 || pte == kpte)
+      continue;
+    pkptdealloc((pagetable_t)PTE2PA(pte),
+                (pagetable_t)PTE2PA(kpte),
+                shift - 9,
+                baseaddr + ((uint64)i << shift),
+                lsz,
+                hsz);
+    // this page doesn't overlap any user memory
+    if(lsz <= baseaddr + ((uint64)i << shift)) {
+      kfree((void *)PTE2PA(pte));
+      // this page doesn't overlap non-user memory
+      if(baseaddr + ((uint64)(i + 1) << shift) <= PLIC) {
+        pkpt[i] = 0;
+      } else {
+        // overlap non-user memory, use kernel page again
+        pkpt[i] = kpte;
+      }
+    }
+  }
+}
+
+int
+pkptsync(pagetable_t pkpt, pagetable_t upt, int osz, int nsz)
+{
+  int ret = 0;
+  if(osz < nsz) {
+    if(pkptalloc(pkpt, upt, PGSHIFT + 9 * 2, 0, osz, nsz) != 0) {
+      pkptdealloc(pkpt, kernel_pagetable, PGSHIFT + 9 * 2, 0, osz, nsz);
+      ret = -1;
+    }
+  } else if(nsz < osz) {
+
+    pkptdealloc(pkpt, kernel_pagetable, PGSHIFT + 9 * 2, 0, nsz, osz);
+  }
+  return ret;
 }
