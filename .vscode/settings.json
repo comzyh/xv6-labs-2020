@@ -1,0 +1,9 @@
+{
+    "editor.tabSize": 2,
+    "files.associations": {
+        "cstdio": "c",
+        "proc.h": "c",
+        "param.h": "c",
+        "memlayout.h": "c"
+    }
+}
