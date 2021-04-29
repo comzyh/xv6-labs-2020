@@ -116,5 +116,11 @@ sys_sigalarm(void)
 
 uint64
 sys_sigreturn(void) {
-  return 0;
+  struct proc *p = myproc();
+  // clear alarming flag
+  p->alarming = 0;
+  // restore all the registers
+  memmove((char *)p->trapframe + 24, (char *)p->trapframe + 288, 288 - 24);
+  // restore a0
+  return *((uint64*)((char*)(&(p->trapframe->a0)) + 288 - 24));
 }

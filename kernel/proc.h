@@ -78,6 +78,7 @@ struct trapframe {
   /* 264 */ uint64 t4;
   /* 272 */ uint64 t5;
   /* 280 */ uint64 t6;
+  /* 288 */ /* start of alarm register backup */ 
 };
 
 enum procstate { UNUSED, SLEEPING, RUNNABLE, RUNNING, ZOMBIE };
@@ -104,6 +105,7 @@ struct proc {
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)
   void (*alarm_handler)();     // alarm handler function address
-  int alarm_remain_ticks;      // 
-  int alarm_ticks;
+  int alarm_remain_ticks;      // remain tick to raise another alarm
+  int alarm_ticks;             // count of tick of one alarm cycle
+  int alarming;                // Is there an existing alarm handler running 
 };

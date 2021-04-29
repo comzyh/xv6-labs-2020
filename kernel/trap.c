@@ -80,10 +80,16 @@ usertrap(void)
   if(which_dev == 2) {
     if (p->alarm_ticks != 0) {
       if (p->alarm_remain_ticks == 1) {
-        // Modify trap frame here
-        // w_sepc((uint64)p->alarm_handler);
-        p->trapframe->epc = (uint64)p->alarm_handler;
-        // 
+
+        if(!p->alarming) {
+          // backup all the registers
+          memmove((char *)p->trapframe + 288, (char *)p->trapframe + 24, 288 - 24);
+          // modify trap frame here, modify the return address
+          p->trapframe->epc = (uint64)p->alarm_handler;
+          // Set the alarming flag
+          p->alarming = 1;
+        }
+        // reset alarm_remain_ticks
         p->alarm_remain_ticks = p->alarm_ticks;
       } else {
         p->alarm_remain_ticks --;
